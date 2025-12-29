@@ -1,7 +1,8 @@
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
-import { Play, Square, AlertOctagon, Zap } from 'lucide-react';
+import { Play, Square, AlertOctagon, Zap, BarChart3 } from 'lucide-react';
 import { EngineState, EngineSettings } from '@/types/deriv';
 import { cn } from '@/lib/utils';
 
@@ -71,6 +72,13 @@ export function ControlPanel({
           <AlertOctagon className="h-4 w-4 mr-2" />
           PANIC CLOSE
         </Button>
+
+        <Link to="/analytics" className="w-full">
+          <Button variant="outline" className="w-full h-10 font-semibold">
+            <BarChart3 className="h-4 w-4 mr-2" />
+            ANALYTICS
+          </Button>
+        </Link>
       </div>
 
       <div className="p-4 space-y-6 flex-1 overflow-y-auto">
