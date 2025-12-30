@@ -15,10 +15,14 @@ const Index = () => {
     activeTrades,
     tradeHistory,
     logs,
+    apiToken,
     start,
     stop,
     panicClose,
     updateSettings,
+    updateProtectedFloor,
+    updateApiToken,
+    closeTrade,
   } = useDerivEngine();
 
   return (
@@ -26,10 +30,13 @@ const Index = () => {
       <ControlPanel
         state={state}
         settings={settings}
+        apiToken={apiToken}
         onStart={start}
         onStop={stop}
         onPanic={panicClose}
         onUpdateSettings={updateSettings}
+        onUpdateProtectedFloor={updateProtectedFloor}
+        onUpdateApiToken={updateApiToken}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -49,6 +56,7 @@ const Index = () => {
               <ActivePositions
                 activeTrades={activeTrades}
                 currentSignal={currentSignal}
+                onCloseTrade={closeTrade}
               />
             </div>
           </div>

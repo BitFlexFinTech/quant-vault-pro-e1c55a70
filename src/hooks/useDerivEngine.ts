@@ -17,7 +17,7 @@ import {
 } from '@/types/deriv';
 
 const WS_URL = 'wss://ws.binaryws.com/websockets/v3?app_id=1089';
-const AUTH_TOKEN = 'bwQm6CfYuKyOduN';
+const DEFAULT_TOKEN = 'bwQm6CfYuKyOduN';
 const TRADE_INTERVAL = 2500;
 const TARGET_WIN_RATE = 85;
 
@@ -33,6 +33,8 @@ export function useDerivEngine() {
   const reqIdRef = useRef(1);
   const tradeIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingContractsRef = useRef<Map<number, TradeExecution>>(new Map());
+
+  const [apiToken, setApiToken] = useState(DEFAULT_TOKEN);
 
   const [state, setState] = useState<EngineState>({
     isRunning: false,
@@ -86,37 +88,31 @@ export function useDerivEngine() {
   }, [getNextReqId]);
 
   const loadSystemSettings = useCallback(async () => {
-    const { data: floorData } = await supabase
-      .from('system_settings')
-      .select('setting_value')
-      .eq('setting_key', 'current_protected_floor')
-      .maybeSingle();
+    const [floorResult, probResult, vaultResult, tokenResult] = await Promise.all([
+      supabase.from('system_settings').select('setting_value').eq('setting_key', 'current_protected_floor').maybeSingle(),
+      supabase.from('system_settings').select('setting_value').eq('setting_key', 'min_probability').maybeSingle(),
+      supabase.from('vault_locks').select('amount'),
+      supabase.from('system_settings').select('setting_value').eq('setting_key', 'api_token').maybeSingle(),
+    ]);
 
-    const { data: probData } = await supabase
-      .from('system_settings')
-      .select('setting_value')
-      .eq('setting_key', 'min_probability')
-      .maybeSingle();
-
-    const { data: vaultData } = await supabase
-      .from('vault_locks')
-      .select('amount');
-
-    const vaultTotal = vaultData?.reduce((sum, v) => sum + Number(v.amount), 0) || 0;
+    const vaultTotal = vaultResult.data?.reduce((sum, v) => sum + Number(v.amount), 0) || 0;
+    const floorValue = floorResult.data ? parseFloat(floorResult.data.setting_value) : 30.03;
+    const probValue = probResult.data ? parseFloat(probResult.data.setting_value) : 85;
+    const tokenValue = tokenResult.data?.setting_value || DEFAULT_TOKEN;
 
     setState(prev => ({
       ...prev,
-      protectedFloor: floorData ? parseFloat(floorData.setting_value) : 30.03,
-      minProbability: probData ? parseFloat(probData.setting_value) : 85,
+      protectedFloor: floorValue,
+      minProbability: probValue,
       vaultBalance: vaultTotal,
     }));
 
-    if (probData) {
-      setSettings(prev => ({
-        ...prev,
-        minProbability: parseFloat(probData.setting_value),
-      }));
-    }
+    setSettings(prev => ({
+      ...prev,
+      minProbability: probValue,
+    }));
+
+    setApiToken(tokenValue);
   }, []);
 
   const handleMessage = useCallback((event: MessageEvent) => {
@@ -189,6 +185,12 @@ export function useDerivEngine() {
           
           handleTradeResult(contract.contract_id, profit, isWin, contract.currency);
         }
+        break;
+      }
+
+      case 'sell': {
+        const sellData = data as DerivResponse & { sell: { sold_for: number; contract_id: number } };
+        addLog('TRD', `Contract #${sellData.sell.contract_id} sold for ${sellData.sell.sold_for.toFixed(2)}`);
         break;
       }
 
@@ -302,6 +304,42 @@ export function useDerivEngine() {
       .eq('setting_key', 'min_probability');
   }, []);
 
+  const updateProtectedFloor = useCallback(async (value: number) => {
+    await supabase
+      .from('system_settings')
+      .update({ setting_value: value.toString() })
+      .eq('setting_key', 'current_protected_floor');
+    
+    setState(prev => ({ ...prev, protectedFloor: value }));
+    addLog('SYS', `Protected floor manually set to $${value.toFixed(2)}`);
+  }, [addLog]);
+
+  const updateApiToken = useCallback(async (token: string) => {
+    await supabase
+      .from('system_settings')
+      .upsert({ setting_key: 'api_token', setting_value: token }, { onConflict: 'setting_key' });
+    
+    setApiToken(token);
+    addLog('SYS', `API Token updated`);
+    
+    // Reconnect with new token
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setTimeout(() => connect(), 500);
+  }, [addLog]);
+
+  const closeTrade = useCallback((contractId: number) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      addLog('ERR', 'Cannot close trade: WebSocket not connected');
+      return;
+    }
+
+    addLog('TRD', `Closing contract #${contractId}...`);
+    send({ sell: contractId, price: 0 });
+  }, [addLog, send]);
+
   const generateSignal = useCallback((): TradeSignal | null => {
     if (assets.length === 0) return null;
 
@@ -389,7 +427,7 @@ export function useDerivEngine() {
 
     ws.onopen = () => {
       addLog('SYS', 'WebSocket connected. Authorizing...');
-      ws.send(JSON.stringify({ authorize: AUTH_TOKEN, req_id: getNextReqId() }));
+      ws.send(JSON.stringify({ authorize: apiToken, req_id: getNextReqId() }));
     };
 
     ws.onmessage = handleMessage;
@@ -404,7 +442,7 @@ export function useDerivEngine() {
     };
 
     wsRef.current = ws;
-  }, [addLog, handleMessage, getNextReqId]);
+  }, [addLog, handleMessage, getNextReqId, apiToken]);
 
   const disconnect = useCallback(() => {
     if (wsRef.current) {
@@ -465,13 +503,29 @@ export function useDerivEngine() {
     };
   }, []);
 
+  // Real-time subscription for global data updates
   useEffect(() => {
     const channel = supabase
-      .channel('trade-updates')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'trade_history' }, () => {
-        loadSystemSettings();
+      .channel('global-updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'system_settings' }, (payload) => {
+        if (payload.new && 'setting_key' in payload.new && 'setting_value' in payload.new) {
+          const { setting_key, setting_value } = payload.new as { setting_key: string; setting_value: string };
+          
+          if (setting_key === 'current_protected_floor') {
+            setState(prev => ({ ...prev, protectedFloor: parseFloat(setting_value) }));
+          } else if (setting_key === 'min_probability') {
+            const prob = parseFloat(setting_value);
+            setState(prev => ({ ...prev, minProbability: prob }));
+            setSettings(prev => ({ ...prev, minProbability: prob }));
+          } else if (setting_key === 'api_token') {
+            setApiToken(setting_value);
+          }
+        }
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'vault_locks' }, () => {
+        loadSystemSettings();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'trade_history' }, () => {
         loadSystemSettings();
       })
       .subscribe();
@@ -489,10 +543,14 @@ export function useDerivEngine() {
     activeTrades,
     tradeHistory,
     logs,
+    apiToken,
     start,
     stop,
     panicClose,
     updateSettings,
+    updateProtectedFloor,
+    updateApiToken,
+    closeTrade,
     connect,
     disconnect,
   };
