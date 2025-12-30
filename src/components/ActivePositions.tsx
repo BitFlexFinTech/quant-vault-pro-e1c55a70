@@ -1,13 +1,15 @@
 import { TradeExecution, TradeSignal } from '@/types/deriv';
 import { cn } from '@/lib/utils';
-import { TrendingUp, TrendingDown, Clock, Zap } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, Zap, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 interface ActivePositionsProps {
   activeTrades: TradeExecution[];
   currentSignal: TradeSignal | null;
+  onCloseTrade?: (contractId: number) => void;
 }
 
-export function ActivePositions({ activeTrades, currentSignal }: ActivePositionsProps) {
+export function ActivePositions({ activeTrades, currentSignal, onCloseTrade }: ActivePositionsProps) {
   return (
     <div className="bg-card rounded-lg border border-border p-4">
       <div className="flex items-center justify-between mb-4">
@@ -86,14 +88,28 @@ export function ActivePositions({ activeTrades, currentSignal }: ActivePositions
                 </div>
               </div>
 
-              <div className="text-right">
-                <p className="text-xs font-mono text-foreground">
-                  ${trade.stake.toFixed(2)}
-                </p>
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <Clock className="h-3 w-3" />
-                  <span>Pending</span>
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <p className="text-xs font-mono text-foreground">
+                    ${trade.stake.toFixed(2)}
+                  </p>
+                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                    <Clock className="h-3 w-3" />
+                    <span>Pending</span>
+                  </div>
                 </div>
+                
+                {onCloseTrade && trade.contractId && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0 hover:bg-destructive/20 hover:text-destructive"
+                    onClick={() => onCloseTrade(trade.contractId!)}
+                    title="Close trade"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                )}
               </div>
             </div>
           ))
